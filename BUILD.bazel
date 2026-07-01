@@ -1,0 +1,128 @@
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("@bazel_skylib//rules:write_file.bzl", "write_file")
+load("@rules_python//python:packaging.bzl", "py_wheel")
+load("@tar.bzl", "tar")
+
+package(default_visibility = ["//visibility:public"])
+
+# rules/swsssdk-py3.mk pins version 2.0.1 (setup.py `version`).
+VERSION = "2.0.1"
+
+# setup.py: packages=['swsssdk'] with package_dir={'swsssdk': 'src/swsssdk'};
+# package_data={'swsssdk': ['config/*.json']}. All .py sources live under
+# src/swsssdk/.
+py_library(
+    name = "sources",
+    srcs = glob(["src/swsssdk/**/*.py"]),
+    # `imports = ["src"]` puts src/ on sys.path so `import swsssdk` resolves
+    # (matching setup.py's package_dir).
+    imports = ["src"],
+    visibility = ["//visibility:public"],
+)
+
+# package_data JSON files. py_wheel deps iterate ctx.files.deps (default
+# outputs), which for py_library covers .py sources but NOT data files.
+# Expose the JSON separately via a filegroup added to py_wheel.deps.
+filegroup(
+    name = "package_data",
+    srcs = glob(["src/swsssdk/config/*.json"]),
+    visibility = ["//visibility:public"],
+)
+
+# bdist_wheel emits top_level.txt listing the top-level import names.
+write_file(
+    name = "top_level_txt",
+    out = "top_level.txt",
+    content = [
+        "swsssdk",
+        "",
+    ],
+)
+
+# Wheel artifact: swsssdk-2.0.1-py3-none-any.whl
+# setup.py has entry_points={} (empty) — no console_scripts. The
+# `console_scripts` dict just above it in setup.py is dead code (never
+# referenced). Do NOT add entry_points here — that would diverge from Make.
+py_wheel(
+    name = "wheel",
+    distribution = "swsssdk",
+    version = VERSION,
+    # setup.py metadata — align with Make wheel METADATA.
+    author = "SONiC Team",
+    author_email = "linuxnetdev@microsoft.com",
+    summary = "Switch State service Python utility library.",
+    license = "Apache 2.0",
+    classifiers = [
+        "Intended Audience :: Developers",
+        "Operating System :: Linux",
+        "Programming Language :: Python :: 2.7",
+        "Programming Language :: Python :: 3.5",
+        "Programming Language :: Python",
+    ],
+    # setup.py install_requires:
+    #   redis>=4.5.4;python_version >= "3.0"
+    #   redis>=3.5.3;python_version < "3.0"
+    #   redis-dump-load
+    requires = [
+        'redis>=4.5.4; python_version >= "3.0"',
+        'redis>=3.5.3; python_version < "3.0"',
+        "redis-dump-load",
+    ],
+    # Extras — high_perf group installs hiredis (matching setup.py).
+    extra_requires = {
+        "high_perf": ["hiredis>=0.1.4"],
+    },
+    # dist-info extras that bdist_wheel/dh_python3 emit.
+    extra_distinfo_files = {
+        "LICENSE": "LICENSE",
+        ":top_level_txt": "top_level.txt",
+    },
+    # setup.py package_dir strips "src/" — mirror in wheel layout so the
+    # module ships as top-level `swsssdk/` not `src/swsssdk/`.
+    strip_path_prefixes = ["src/"],
+    deps = [
+        ":sources",
+        ":package_data",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+# Install tar layer (OCI image consumer). Layout matches Debian system Python
+# pip3 install:
+#   - swsssdk package                          → /usr/lib/python3/dist-packages/swsssdk/
+#   - swsssdk/config/database_config.json      → same package_data path
+_SWSSSDK_PY_FILES = [
+    "__init__.py",
+    "configdb.py",
+    "dbconnector.py",
+    "exceptions.py",
+    "interface.py",
+    "port_util.py",
+    "sonic_db_dump_load.py",
+    "util.py",
+]
+
+_SWSSSDK_CONFIG_FILES = [
+    "database_config.json",
+]
+
+tar(
+    name = "install",
+    srcs = (
+        ["src/swsssdk/" + f for f in _SWSSSDK_PY_FILES] +
+        ["src/swsssdk/config/" + f for f in _SWSSSDK_CONFIG_FILES]
+    ),
+    mtree = (
+        [
+            "./usr/lib/python3/dist-packages/swsssdk/" + f +
+            " uid=0 gid=0 mode=0644 type=file content=$(location src/swsssdk/" + f + ")"
+            for f in _SWSSSDK_PY_FILES
+        ] +
+        [
+            "./usr/lib/python3/dist-packages/swsssdk/config/" + f +
+            " uid=0 gid=0 mode=0644 type=file content=$(location src/swsssdk/config/" + f + ")"
+            for f in _SWSSSDK_CONFIG_FILES
+        ]
+    ),
+    visibility = ["//visibility:public"],
+)

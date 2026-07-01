@@ -1,0 +1,11 @@
+module(
+    name = "sonic-py-swsssdk",
+    version = "2.0.1",
+)
+
+# Pure Python wheel: rules_python (py_wheel), aspect_rules_py (py_library),
+# tar.bzl (install layer). No apt / no cc / no bindgen / no patches.
+bazel_dep(name = "rules_python", version = "1.7.0")
+bazel_dep(name = "aspect_rules_py", version = "1.8.4")
+bazel_dep(name = "tar.bzl", version = "0.8.1")
+bazel_dep(name = "bazel_skylib", version = "1.9.0")

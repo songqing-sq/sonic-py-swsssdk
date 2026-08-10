@@ -1,6 +1,7 @@
 load("@aspect_rules_py//py:defs.bzl", "py_library")
 load("@bazel_skylib//rules:write_file.bzl", "write_file")
 load("@rules_python//python:packaging.bzl", "py_wheel")
+load("@sonic_build_infra//python:pytest_test.bzl", "sonic_py_pytest_test")
 load("@tar.bzl", "tar")
 
 package(default_visibility = ["//visibility:public"])
@@ -126,3 +127,54 @@ tar(
     ),
     visibility = ["//visibility:public"],
 )
+
+# =============================================================================
+# Unit tests. Bazel equivalent of the Make-side test step in slave.mk's
+# SONIC_PYTHON_WHEELS recipe:
+#     pip3 install ".[testing]" && pip3 uninstall --yes <self>
+#     timeout ... python3 -m pytest        # gate: wheel is built only if green
+#
+# One py_test per test file instead of one monolithic pytest run: same case set,
+# but parallel + per-file cacheable.
+#
+# pytest.ini's addopts (--cov / --junitxml) are deliberately not reproduced:
+# coverage and JUnit reporting belong to the CI layer, and Bazel already emits
+# its own XML per test target.
+# =============================================================================
+py_library(
+    name = "tests_lib",
+    testonly = True,
+    srcs = glob(["test/*.py"]),
+    data = glob(["test/config/*.json"]),
+    # "." keeps `test` importable as a package, matching how Make runs pytest
+    # with rootdir=src/sonic-py-swsssdk.
+    imports = ["."],
+    deps = [
+        # Code under test. Each test file also does its own
+        # sys.path.insert(0, <root>/src), which is Make's
+        # `pip3 uninstall --yes <self>` trick in source form: exercise the tree,
+        # not an installed copy.
+        ":sources",
+        # swsssdk/sonic_db_dump_load.py imports redisdl at module import time.
+        "@redis-dump-load-py3//:sources",
+        "@sonic_py_swsssdk_pip//mock",
+        "@sonic_py_swsssdk_pip//pytest",
+        "@sonic_py_swsssdk_pip//redis",
+    ],
+)
+
+# Matches what pytest collects on the Make side (rootdir discovery of test/):
+# both test_*.py and *_test.py.
+_TEST_FILES = [
+    "sonic_db_dump_load_test.py",
+    "test_moduleLoad.py",
+    "test_port_util.py",
+]
+
+[sonic_py_pytest_test(
+    name = f[:-len(".py")],
+    test_file = "test/" + f,
+    # venv name from bazel/pyproject.toml [project].name.
+    venv = "sonic-py-swsssdk",
+    deps = [":tests_lib"],
+) for f in _TEST_FILES]
